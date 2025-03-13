@@ -1,3 +1,4 @@
+## 只经过了简单的测试，成功提交了作业并获取到了返回的测试结果
 ## 方法
 - 主体部分在静态类JCoderPlugin里，封装好了GetCookies()、Initializing()、SubmitCodeAndGetFeedback()、KeepCookiesAlive()四个方法
 - GetCookies() 使用Selenium弹出浏览器界面，每隔1s查询是否获取到JCoderID和csrftoken，若用户登录成功，成功获取Cookie则关闭浏览器。
