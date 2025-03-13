@@ -4,11 +4,14 @@ import org.openqa.selenium.Cookie;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.chrome.ChromeDriver;
 
-import java.io.IOException;
+import java.io.*;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -20,7 +23,16 @@ public class JCoderPlugin
     /// 轮询用户是否已完成登录，获取到Cookie
     private static final Lock lock = new ReentrantLock();
 
-    /// 生成报头
+    /// 全局Cookies
+    public static Dictionary<String, String> Cookies = new Hashtable<String, String>();
+
+    /// Cookie字符串，用来生成报头
+    public static String cookie_string;
+
+    /// 存储用户所有Course
+    public static List<Course> courses = new ArrayList<>();
+
+    /// 生成报头，参数referer暂时无用，传入null即可。报头含浏览器标识，x-csrftoken和Cookie字符串
     public static Map<String, String> GetPostHeadersPara(String referer, String csrftoken, String cookie)
     {
         Map<String, String> map = new HashMap<>();
@@ -41,14 +53,6 @@ public class JCoderPlugin
         map.put("Cookie", cookie);
         return map;
     }
-
-    /// 全局cookies
-    public static Dictionary<String, String> Cookies = new Hashtable<String, String>();
-    /// 用户所有course
-    public static List<Course> courses = new ArrayList<>();
-    /// Cookie字符串，用来生成报头
-    public static String cookie_string;
-
     //"https://oj.cse.sustech.edu.cn/api/union/my_courses_list/"
     //"page=1&offset=20"
 
@@ -56,7 +60,6 @@ public class JCoderPlugin
     public static HttpResponse<String> SendPostRequest(String url, String body) throws IOException, InterruptedException
     {
         HttpClient httpClient = HttpClient.newHttpClient();
-        //HttpRequest.BodyPublisher b=HttpRequest.BodyPublishers.ofString();
         // 创建一个HTTP请求 指定URI
         Map<String, String> headBody = GetPostHeadersPara(null, Cookies.get("csrftoken"), cookie_string);
         HttpRequest httpRequest = HttpRequest.newBuilder()
@@ -86,7 +89,7 @@ public class JCoderPlugin
         }
     }
 
-    /// 使用selenium弹出浏览器窗口让用户登录
+    /// 使用selenium弹出浏览器窗口让用户登录，获取JCoderID和csrftoken。每秒钟轮询用户是否登录成功。
     public static void GetCookies()
     {
         WebDriver driver = new ChromeDriver();
@@ -143,7 +146,7 @@ public class JCoderPlugin
         driver.close();
         // endregion
     }
-
+    /// 初始化，获取用户的Course和其活动的Assignment
     public static void Initializing()
     {
         // 创建ChromeDriver实例
@@ -169,7 +172,6 @@ public class JCoderPlugin
                 courses.add(course);
             }
             System.out.println(responseCourse.body());
-            scanner.nextLine();
             //获取每个Assignment列表(考虑到均为第一次使用此OJ的CS109同学，故暂不考虑有多门课程，至于冗余加载学完的课程的问题，后续如有其他课程也使用此OJ也许会更新）
             for (Course course : courses)
             {
@@ -288,7 +290,6 @@ public class JCoderPlugin
                 }
             }
             //System.out.println(courses.getFirst().);
-            scanner.nextLine();
             //获取Problem列表
             //获取题目
         } catch (IOException | InterruptedException | ParseException e)
@@ -298,46 +299,72 @@ public class JCoderPlugin
         {
         }
     }
-    /// 提交代码，其中codeType因为都是java，调用时传入null即可
-    public static CodeResult SubmitCodeAndGetFeedback(String problemId,String code,String codeType) throws IOException, InterruptedException
+
+    /// 提交代码，此重载需提供代码String文本，其中codeType因为都是java，调用时传入null即可
+    public static CodeResult SubmitCodeAndGetFeedback(String homeworkId, String problemId, String courseId, String code, String codeType) throws IOException, InterruptedException
     {
         JSONObject codeJsonObject = new JSONObject();
         codeJsonObject.put("Main", code);
-        String body="problemId="+problemId+"&language=2"+"&files="+java.net.URLEncoder.encode(codeJsonObject.toString());
+        String body = "homeworkId=" + homeworkId + "&problemId=" + problemId + "&courseId=" + courseId + "&language=2&subGroup=false" + "&files=" + java.net.URLEncoder.encode(codeJsonObject.toString());
         //problemId=P001&language=2&files=%7B%22Main%22%3A%22212%22%7D
-        HttpResponse<String> res= SendPostRequest("https://oj.cse.sustech.edu.cn/api/problem/submit/",body);
+        HttpResponse<String> res = SendPostRequest("https://oj.cse.sustech.edu.cn/api/homework/submit/objective/", body);
 
         JSONObject json_res = new JSONObject(res.body());
         JCoderPlugin.AllJSONValueToString(json_res);
         String recordId = json_res.getString("recordId");
-
-        HttpResponse<String> responseRecord= JCoderPlugin.SendPostRequest("https://oj.cse.sustech.edu.cn/api/record/result/","recordId="+recordId);
-        JSONObject json_record = new JSONObject(responseRecord.body());
-        System.out.println(responseRecord.body());
-        JSONArray json_record_list = json_record.getJSONArray("resultList");
-        //JCoderPlugin.AllJSONValueToString(json_record);
-        CodeResult cres=new CodeResult(json_record.getString("problemId"));
-        cres.resultState=json_record.getString("resultState");
-        cres.score=json_record.getInt("score");
-        for(int i=0;i<json_record_list.length();i++)
+        while(true)
         {
-            TestCaseResult tres=new TestCaseResult();
-            JSONObject obj=json_record_list.getJSONObject(i);
-            tres.title=obj.getString("title");
-            tres.memory=obj.getInt("memory");
-            tres.time=obj.getInt("time");
-            tres.message=obj.getString("message");
-            tres.state=obj.getString("state");
-            tres.score=obj.getInt("score");
-            cres.testCaseResultList.add(tres);
+            HttpResponse<String> responseRecord = JCoderPlugin.SendPostRequest("https://oj.cse.sustech.edu.cn/api/record/result/", "recordId=" + recordId + "&courseId=" + courseId + "&homeworkId=" + homeworkId);
+            JSONObject json_record = new JSONObject(responseRecord.body());
+            System.out.println(responseRecord.body());
+
+            JSONArray json_record_list = json_record.getJSONArray("resultList");
+            //JCoderPlugin.AllJSONValueToString(json_record);
+            CodeResult cres = new CodeResult(json_record.getString("problemId"));
+            cres.resultState = json_record.getString("resultState");
+            if(cres.resultState.equals("JG"))
+            {
+                Thread.sleep(1000);
+                continue;
+            }
+            cres.score = json_record.getInt("score");
+            for (int i = 0; i < json_record_list.length(); i++)
+            {
+                TestCaseResult tres = new TestCaseResult();
+                JSONObject obj = json_record_list.getJSONObject(i);
+                tres.title = obj.getString("title");
+                tres.memory = obj.getInt("memory");
+                tres.time = obj.getInt("time");
+                tres.message = obj.getString("message");
+                tres.state = obj.getString("state");
+                tres.score = obj.getInt("score");
+                cres.testCaseResultList.add(tres);
+            }
+            return cres;
         }
-        return cres;
-
     }
-
+    /// 提交代码，此重载需提供代码文件路径，其中codeType因为都是java，调用时传入null即可
+    public static CodeResult SubmitCodeAndGetFeedback(String homeworkId, String problemId, String courseId, Path codePath, String codeType)
+    {
+        try
+        {
+            StringBuilder codeStringBuilder = new StringBuilder();
+            List<String> lines = Files.readAllLines(codePath);
+            for (String line : lines)
+            {
+                codeStringBuilder.append(line+"\r\n");
+            }
+            return SubmitCodeAndGetFeedback(homeworkId, problemId, courseId, codeStringBuilder.toString(), null);
+        } catch (IOException | InterruptedException e)
+        {
+            System.out.println(e.getMessage());
+            return null;
+        }
+    }
+    /// 每500000ms像服务器发送一个查询，保持Cookies不变
     public static void KeepCookiesAlive() throws IOException, InterruptedException
     {
-        Thread t=new Thread(()->
+        Thread t = new Thread(() ->
         {
             for (Course course : courses)
             {
